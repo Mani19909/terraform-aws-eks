@@ -110,22 +110,11 @@ Recommended:
 * Multi-AZ: Enabled
 * Backup: Enabled
 
-Create database:
-
-```sql
-CREATE DATABASE expense;
-```
 
 Connect from Bastion Host:
 
 ```bash
-mysql -h <RDS-ENDPOINT> -u root -p
-```
-
-Import schema:
-
-```sql
-SOURCE backend.sql;
+mysql -h <DB-R53-ADRESS> -u root -pExpenseApp1
 ```
 
 Verify:
@@ -133,7 +122,22 @@ Verify:
 ```sql
 SHOW TABLES;
 ```
+```sql
+USE transactions;
 
+
+CREATE TABLE IF NOT EXISTS transactions (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    amount INT,
+    description VARCHAR(255)
+);
+
+
+CREATE USER IF NOT EXISTS 'expense'@'%' IDENTIFIED BY 'Expe
+GRANT ALL ON transactions.* TO 'expense'@'%';
+FLUSH PRIVILEGES;
+
+```
 ---
 
 # 6. Create ACM Certificate
@@ -142,7 +146,7 @@ Request SSL certificate:
 
 ```bash
 aws acm request-certificate \
---domain-name example.com \
+--domain-name daws.info \
 --validation-method DNS
 ```
 
