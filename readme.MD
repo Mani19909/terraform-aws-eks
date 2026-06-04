@@ -1,103 +1,368 @@
-# Infrastructure
+# AWS EKS Production Infrastructure Setup Guide
 
-![alt text](eks-infra.svg)
+## Architecture Overview
 
-Creating above infrastructure involves lot of steps, as maintained sequence we need to create
+This project provisions and configures a production-ready AWS infrastructure for Kubernetes applications using Amazon EKS.
+
+### Components
+
 * VPC
-* All security groups and rules
-* Bastion Host, VPN
-* EKS
+* Security Groups
+* Bastion Host
+* VPN (Optional)
+* Amazon EKS
+* Amazon RDS MySQL
+* AWS Certificate Manager (ACM)
+* AWS Load Balancer Controller (ALB Ingress)
+* Amazon ECR
+* CDN (Optional)
+
+---
+
+# Infrastructure Creation Sequence
+
+The resources must be created in the following order:
+
+| Order | Component                    | Required |
+| ----- | ---------------------------- | -------- |
+| 1     | VPC                          | Yes      |
+| 2     | Security Groups              | Yes      |
+| 3     | Bastion Host                 | Yes      |
+| 4     | VPN                          | Optional |
+| 5     | Amazon RDS                   | Yes      |
+| 6     | ACM Certificate              | Yes      |
+| 7     | EKS Cluster                  | Yes      |
+| 8     | AWS Load Balancer Controller | Yes      |
+| 9     | Amazon ECR                   | Yes      |
+| 10    | CDN                          | Optional |
+
+---
+
+# 1. Create VPC
+
+Create:
+
+* Public Subnets
+* Private Subnets
+* Internet Gateway
+* NAT Gateway
+* Route Tables
+
+Example CIDR:
+
+| Resource         | CIDR         |
+| ---------------- | ------------ |
+| VPC              | 10.0.0.0/16  |
+| Public Subnet A  | 10.0.1.0/24  |
+| Public Subnet B  | 10.0.2.0/24  |
+| Private Subnet A | 10.0.11.0/24 |
+| Private Subnet B | 10.0.12.0/24 |
+
+---
+
+# 2. Create Security Groups
+
+Create Security Groups for:
+
+* Bastion Host
+* EKS Cluster
+* Worker Nodes
 * RDS
-* ACM for ingress
-* ALB as ingress controller
-* ECR repo to host images
-* CDN
+* ALB
 
-## Sequence
+Configure required inbound and outbound rules.
 
-* (Required). create VPC first
-* (Required). create SG after VPC
-* (Required). create bastion host. It is used to connect RDS and EKS cluster.
-* (Optional). VPN, same as bastion but a windows laptop can directly connect to VPN and get access of RDS and EKS.
-* (Required). RDS. Create RDS because we don't create databases in Kubernetes.
-* (Required). ACM. It is required to get SSL certificates for our ALB ingress controller.
-* (Required). ingress ALB is required to expose our applications to outside world.
-* (Required). ECR. We need to create ECR repo to host the application images.
-* (Optional). CDN is optional. but good to have.
+---
 
-### Admin activities
+# 3. Create Bastion Host
 
-**Bastion**
-* SSH to bastion host
-* run below command and configure the credentials.
+Purpose:
+
+* Connect to EKS Cluster
+* Connect to RDS
+* Run kubectl commands
+* Install DevOps tools
+
+Required Tools:
+
+```bash
+aws
+kubectl
+helm
+eksctl
+terraform
+git
 ```
-aws configure
+
+---
+
+# 4. Optional VPN
+
+VPN allows developers to connect securely from local laptops without SSHing into Bastion Host.
+
+---
+
+# 5. Create Amazon RDS
+
+Recommended:
+
+* Engine: MySQL 8.x
+* Multi-AZ: Enabled
+* Backup: Enabled
+
+Create database:
+
+```sql
+CREATE DATABASE expense;
 ```
-* get the kubernetes config using below command
+
+Connect from Bastion Host:
+
+```bash
+mysql -h <RDS-ENDPOINT> -u root -p
 ```
-aws eks update-kubeconfig --region us-east-1 --name <YOUR-CLUSTER-NAME>
+
+Import schema:
+
+```sql
+SOURCE backend.sql;
 ```
-* Now you should be able to connect K8 cluster
+
+Verify:
+
+```sql
+SHOW TABLES;
 ```
+
+---
+
+# 6. Create ACM Certificate
+
+Request SSL certificate:
+
+```bash
+aws acm request-certificate \
+--domain-name example.com \
+--validation-method DNS
+```
+
+Validate certificate through Route53.
+
+---
+
+# 7. Create Amazon EKS Cluster
+
+Configure kubectl:
+
+```bash
+aws eks update-kubeconfig \
+--region us-east-1 \
+--name <cluster-name>
+```
+
+Verify:
+
+```bash
 kubectl get nodes
 ```
 
-**RDS**:
-* Connect to RDS using bastion host.
-```
-mysql -h <DB-R53-ADRESS> -u root -pExpenseApp1
-```
-* We are creating schema while creating RDS. But table should be created.
-* Refer backend.sql to create
-    * Table
-    * User
-    * flush privileges
+Expected:
 
-**Ingress Controller**
-
-Ref: https://kubernetes-sigs.github.io/aws-load-balancer-controller/v2.8/
-* Connect to K8 cluster from bastion host.
-* Create an IAM OIDC provider. You can skip this step if you already have one for your cluster.
-```
-eksctl utils associate-iam-oidc-provider --region us-east-1 --cluster <your-cluster-name> --approve
-```
-* Download an IAM policy for the LBC using one of the following commands:
-```
-curl -o iam-policy.json https://raw.githubusercontent.com/kubernetes-sigs aws-load-balancer-controller/v2.8.1/docs/install/iam_policy.json
+```bash
+NAME                     STATUS
+ip-10-0-1-100.ec2.internal Ready
+ip-10-0-2-100.ec2.internal Ready
 ```
 
-* Create an IAM policy named AWSLoadBalancerControllerIAMPolicy. If you downloaded a different policy, replace iam-policy with the name of the policy that you downloaded.
-```
-aws iam create-policy --policy-name AWSLoadBalancerControllerIAMPolicy --policy-document file://iam-policy.json
+---
+
+# 8. Install AWS Load Balancer Controller
+
+## Associate IAM OIDC Provider
+
+```bash
+eksctl utils associate-iam-oidc-provider \
+--region us-east-1 \
+--cluster <cluster-name> \
+--approve
 ```
 
-* Create a IAM role and ServiceAccount for the AWS Load Balancer controller, use the ARN from the step above
+---
 
+## Download IAM Policy
+
+```bash
+curl -o iam-policy.json \
+https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/v2.8.1/docs/install/iam_policy.json
 ```
+
+---
+
+## Create IAM Policy
+
+```bash
+aws iam create-policy \
+--policy-name AWSLoadBalancerControllerIAMPolicy \
+--policy-document file://iam-policy.json
+```
+
+---
+
+## Create IAM Service Account
+
+Get AWS Account ID:
+
+```bash
+AWS_ACCOUNT_ID=$(aws sts get-caller-identity \
+--query Account \
+--output text)
+```
+
+Create Service Account:
+
+```bash
 eksctl create iamserviceaccount \
 --cluster=<cluster-name> \
 --namespace=kube-system \
 --name=aws-load-balancer-controller \
---attach-policy-arn=arn:aws:iam::<AWS_ACCOUNT_ID>:policy/AWSLoadBalancerControllerIAMPolicy \
+--attach-policy-arn=arn:aws:iam::$AWS_ACCOUNT_ID:policy/AWSLoadBalancerControllerIAMPolicy \
 --override-existing-serviceaccounts \
 --approve
 ```
 
-* Add the EKS chart repo to Helm
-```
+---
+
+## Install Helm Chart
+
+Add repository:
+
+```bash
 helm repo add eks https://aws.github.io/eks-charts
+helm repo update
 ```
 
-* Helm install command for clusters with IRSA:
+Install controller:
 
-```
-helm install aws-load-balancer-controller eks/aws-load-balancer-controller -n kube-system --set clusterName=<cluster-name> --set serviceAccount.create=false --set serviceAccount.name=aws-load-balancer-controller
+```bash
+helm install aws-load-balancer-controller \
+eks/aws-load-balancer-controller \
+-n kube-system \
+--set clusterName=<cluster-name> \
+--set serviceAccount.create=false \
+--set serviceAccount.name=aws-load-balancer-controller
 ```
 
-* check aws-load-balancer-controller is running in kube-system namespace.
-```
+Verify:
+
+```bash
 kubectl get pods -n kube-system
 ```
 
+Expected:
 
+```bash
+aws-load-balancer-controller-xxxxx Running
+aws-load-balancer-controller-yyyyy Running
+```
 
+---
+
+# 9. Create Amazon ECR Repository
+
+Create repository:
+
+```bash
+aws ecr create-repository \
+--repository-name expense-backend
+```
+
+Login:
+
+```bash
+aws ecr get-login-password \
+| docker login \
+--username AWS \
+--password-stdin <ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com
+```
+
+Push image:
+
+```bash
+docker build -t expense-backend .
+
+docker tag expense-backend:latest \
+<ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/expense-backend:latest
+
+docker push \
+<ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/expense-backend:latest
+```
+
+---
+
+# 10. Configure ALB Ingress
+
+Example:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: expense-ingress
+  annotations:
+    kubernetes.io/ingress.class: alb
+spec:
+  rules:
+  - host: expense.example.com
+```
+
+Apply:
+
+```bash
+kubectl apply -f ingress.yaml
+```
+
+Verify:
+
+```bash
+kubectl get ingress
+```
+
+---
+
+# Optional CDN
+
+Use Amazon CloudFront in front of:
+
+* ALB
+* S3 Static Websites
+* Frontend Applications
+
+Benefits:
+
+* Global Caching
+* Reduced Latency
+* Enhanced Security
+
+---
+
+# Verification Checklist
+
+```bash
+kubectl get nodes
+kubectl get pods -A
+kubectl get ingress
+kubectl get svc
+kubectl get deployments
+```
+
+Infrastructure is ready when:
+
+* EKS nodes are Ready
+* RDS is reachable
+* ALB Controller is Running
+* Ingress creates ALB successfully
+* Images are pushed to ECR
+* Application is accessible through HTTPS
+
+```
+```
